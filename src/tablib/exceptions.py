@@ -20,3 +20,23 @@ class HeadersNeeded(TablibException, AttributeError):
 
 class UnsupportedFormat(TablibException, NotImplementedError):
     """Format not supported."""
+
+
+class HeadersRequired(TablibException, ValueError):
+    """Column-identity merge needs headers on every Dataset."""
+
+
+class AmbiguousColumns(TablibException, ValueError):
+    """Duplicate headers require an explicit position-based identity map."""
+
+
+class InvalidIdentityMap(TablibException, ValueError):
+    """The explicit column-identity map does not match the dataset width."""
+
+
+class PlanStale(TablibException, RuntimeError):
+    """The input structure changed after the reconciliation plan was built."""
+
+
+class MergeRejected(TablibException, ValueError):
+    """The plan contains columns that could not be reconciled."""

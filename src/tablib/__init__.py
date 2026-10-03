@@ -20,3 +20,9 @@ from .core import (  # noqa: F401
     import_book,
     import_set,
 )
+from .merge import (  # noqa: F401
+    MergePlan,
+    ReconcilePolicy,
+    merge_sets,
+    plan_merge,
+)

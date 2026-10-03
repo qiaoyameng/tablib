@@ -39,6 +39,16 @@ Functions
 
 .. autofunction:: import_set
 
+.. autofunction:: plan_merge
+
+.. autofunction:: merge_sets
+
+.. autoclass:: ReconcilePolicy
+   :members:
+
+.. autoclass:: MergePlan
+   :members:
+
 
 ----------
 Exceptions

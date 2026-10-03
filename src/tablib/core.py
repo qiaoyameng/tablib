@@ -806,6 +806,50 @@ class Dataset:
 
         return _dset
 
+    def plan_merge(self, *others, policy=None, identity_maps=None,
+                   **policy_kwargs):
+        """Plan a row-level merge of this dataset with ``others`` joined by
+        column identity (headers) rather than raw position.
+
+        Unlike :meth:`stack`, columns are matched by identity, so sources may
+        present the same columns in a different order or with extra columns.
+        Returns a reviewable :class:`~tablib.merge.MergePlan`; nothing is
+        built until its ``apply()`` is called.
+
+        :param \\*others: additional :class:`Dataset` instances.
+        :param policy: a :class:`~tablib.merge.ReconcilePolicy`, or pass the
+            policy keyword arguments ``how`` (``'intersection'``/``'union'``),
+            ``fill``, ``allow_lossy`` and ``converters`` directly.
+        :param identity_maps: mapping of ``dataset_index -> identities`` for
+            datasets with no or duplicate headers; ``self`` is index ``0``.
+            Each value names one identity per column position, either as a
+            sequence or a ``{position: identity}`` dict.
+        """
+
+        from .merge import plan_merge
+
+        return plan_merge(
+            [self, *others],
+            policy=policy,
+            identity_maps=identity_maps,
+            **policy_kwargs,
+        )
+
+    def merge(self, *others, policy=None, identity_maps=None,
+              **policy_kwargs):
+        """Plan and immediately apply a column-identity row merge.
+
+        See :meth:`plan_merge`; equivalent to
+        ``self.plan_merge(*others, ...).apply()``.
+        """
+
+        return self.plan_merge(
+            *others,
+            policy=policy,
+            identity_maps=identity_maps,
+            **policy_kwargs,
+        ).apply()
+
     def remove_duplicates(self):
         """Removes all duplicate rows from the :class:`Dataset` object
         while maintaining the original order."""

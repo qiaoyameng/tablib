@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 """Tests for Tablib."""
 
+import codecs
 import datetime as dt
 import doctest
 import json
@@ -1086,7 +1087,7 @@ class CSVTests(BaseTestCase):
         self.assertEqual(result, '|1. a| |2. b| |3. c|\r\n')
 
     def test_csv_stream_export(self):
-        """Verify exporting dataset object as CSV from file object."""
+        """Verify exporting dataset object as CSV chunks."""
 
         # Build up the csv string with headers first, followed by each row
         csv = ''
@@ -1102,7 +1103,117 @@ class CSVTests(BaseTestCase):
 
         frm = registry.get_format('csv')
         csv_stream = frm.export_stream_set(self.founders)
-        self.assertEqual(csv, csv_stream.getvalue())
+        self.assertEqual(csv, ''.join(csv_stream))
+
+    def test_csv_stream_export_formats_lazily_in_small_chunks(self):
+        formatted = []
+
+        def formatter(value):
+            formatted.append(value)
+            return str(value).upper()
+
+        dataset = tablib.Dataset(headers=('first', 'last', 'gpa'))
+        dataset.append(('John', 'Adams', 90))
+        dataset.append(('George', 'Washington', 67))
+        dataset.add_formatter(None, formatter)
+
+        chunks = registry.get_format('csv').export_stream_set(dataset, chunk_size=1)
+        header = ''.join(next(chunks) for _ in range(len('first,last,gpa\r\n')))
+
+        self.assertEqual(header, 'first,last,gpa\r\n')
+        self.assertEqual(formatted, [])
+
+        first_data_character = next(chunks)
+        self.assertEqual(first_data_character, 'J')
+        self.assertEqual(formatted, ['John', 'Adams', 90])
+
+        chunks.close()
+        self.assertEqual(formatted, ['John', 'Adams', 90])
+
+    def test_csv_stream_export_content_with_small_chunks(self):
+        formatted = []
+
+        def formatter(value):
+            formatted.append(value)
+            return value
+
+        dataset = tablib.Dataset(headers=('name', 'note'))
+        dataset.append(('a,b', 'line1\nline2'))
+        dataset.append(('plain', 'quoted"text'))
+        dataset.add_formatter(None, formatter)
+
+        chunks = registry.get_format('csv').export_stream_set(dataset, chunk_size=3)
+
+        self.assertEqual(
+            ''.join(chunks),
+            'name,note\r\n'
+            '"a,b","line1\nline2"\r\n'
+            'plain,"quoted""text"\r\n'
+        )
+        self.assertEqual(formatted, ['a,b', 'line1\nline2', 'plain', 'quoted"text'])
+
+    def test_csv_stream_export_keeps_chunks_emitted_before_error(self):
+        def formatter(value):
+            if value == 2:
+                raise RuntimeError('formatter failed')
+            return value
+
+        dataset = tablib.Dataset()
+        dataset.append((1, 1))
+        dataset.append((2, 2))
+        dataset.add_formatter(None, formatter)
+
+        chunks = registry.get_format('csv').export_stream_set(dataset, chunk_size=1)
+        received = []
+
+        with self.assertRaisesRegex(RuntimeError, 'formatter failed'):
+            for chunk in chunks:
+                received.append(chunk)
+
+        self.assertEqual(''.join(received), '1,1\r\n')
+
+    def test_csv_stream_export_uses_fixed_dataset_snapshot(self):
+        chunks = registry.get_format('csv').export_stream_set(self.founders, chunk_size=4)
+
+        del self.founders['last_name']
+        self.founders.append(('Old', 100500))
+
+        self.assertEqual(
+            ''.join(chunks),
+            'first_name,last_name,gpa\r\n'
+            'John,Adams,90\r\n'
+            'George,Washington,67\r\n'
+            'Thomas,Jefferson,50\r\n'
+        )
+
+    def test_csv_stream_export_bytes_with_bom(self):
+        dataset = tablib.Dataset()
+        dataset.append(('Æ', '雪'))
+
+        chunks = registry.get_format('csv').export_stream_set(
+            dataset, encoding='utf-8-sig', chunk_size=1
+        )
+        emitted = list(chunks)
+        content = b''.join(emitted)
+
+        self.assertTrue(all(isinstance(chunk, bytes) for chunk in emitted))
+        self.assertEqual(content, codecs.BOM_UTF8 + 'Æ,雪\r\n'.encode('utf-8'))
+        self.assertEqual(content.count(codecs.BOM_UTF8), 1)
+
+    def test_csv_stream_export_bytes(self):
+        dataset = tablib.Dataset()
+        dataset.append(('Æ', '雪'))
+
+        chunks = registry.get_format('csv').export_stream_set(dataset, as_bytes=True)
+
+        self.assertEqual(b''.join(chunks), 'Æ,雪\r\n'.encode('utf-8'))
+
+    def test_csv_stream_export_invalid_chunk_size(self):
+        with self.assertRaises(ValueError):
+            registry.get_format('csv').export_stream_set(data, chunk_size=0)
+
+    def test_csv_export_retains_string_return_type(self):
+        self.assertIsInstance(self.founders.export('csv'), str)
 
     def test_unicode_csv(self):
         """Check if unicode in csv export doesn't raise."""

@@ -51,6 +51,18 @@ When exporting with the ``csv`` format, the top row will contain headers, if
 they have been set. Otherwise, the top row will contain the first row of the
 dataset.
 
+For streaming responses, use ``export_stream_set()``. It returns an iterator
+over text chunks by default. Pass ``as_bytes=True`` for UTF-8 byte chunks, or
+set ``encoding`` for another encoding. Byte output uses one incremental
+encoder, so BOM-based encodings such as ``utf-8-sig`` emit their BOM only
+once. The headers and row structure are captured when iteration is created,
+while cell formatters remain lazy until each row is reached::
+
+    chunks = registry.get_format('csv').export_stream_set(dataset, chunk_size=8192)
+    byte_chunks = registry.get_format('csv').export_stream_set(
+        dataset, encoding='utf-8-sig', chunk_size=8192
+    )
+
 When importing a CSV data source or exporting a dataset as CSV, you can pass any
 parameter supported by the :py:func:`csv.reader` and :py:func:`csv.writer`
 functions. For example::

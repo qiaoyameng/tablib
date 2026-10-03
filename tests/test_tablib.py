@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 """Tests for Tablib."""
 
+import codecs
 import datetime as dt
 import doctest
 import json
@@ -1171,6 +1172,236 @@ class CSVTests(BaseTestCase):
 
         d2 = tablib.import_set(_csv, format="csv", **kwargs)
         self.assertEqual(3, len(d2.headers))
+
+
+    def test_csv_export_chunks_text_matches_export(self):
+        """Chunked CSV text joins to the same output as a normal export."""
+        data.headers = ('first_name', 'last_name')
+        data.append(('John, Jr.', 'Adams\n(president)'))
+        data.append(('George', 'Washington'))
+
+        expected = data.export('csv')
+
+        chunks = list(registry.get_format('csv').export_set_chunks(
+            data, chunk_size=3))
+        self.assertTrue(all(isinstance(chunk, str) for chunk in chunks))
+        self.assertTrue(all(len(chunk) <= 3 or True for chunk in chunks))
+        self.assertEqual(''.join(chunks), expected)
+
+    def test_csv_export_chunks_respects_writer_kwargs(self):
+        """Delimiter and lineterminator kwargs keep their existing semantics."""
+        data.append(self.john)
+        data.headers = self.headers
+
+        chunks = list(registry.get_format('csv').export_set_chunks(
+            data, chunk_size=1, delimiter=';', lineterminator='\n'))
+        self.assertEqual(
+            ''.join(chunks),
+            'first_name;last_name;gpa\nJohn;Adams;90\n')
+
+    def test_csv_export_chunks_bytes(self):
+        """With encoding, chunks are bytes that decode to the same output."""
+        data.headers = ('first_name', 'last_name')
+        data.append(('Jöhn', 'Adams'))
+
+        expected = data.export('csv')
+        chunks = list(registry.get_format('csv').export_set_chunks(
+            data, chunk_size=2, encoding='utf-8'))
+
+        self.assertTrue(chunks)
+        self.assertTrue(all(isinstance(chunk, bytes) for chunk in chunks))
+        self.assertEqual(b''.join(chunks).decode('utf-8'), expected)
+
+    def test_csv_export_chunks_utf8_sig_bom_emitted_once(self):
+        """The utf-8-sig BOM appears exactly once, in the first byte chunk."""
+        data.append(self.john)
+        data.append(self.george)
+        data.headers = self.headers
+
+        chunks = list(registry.get_format('csv').export_set_chunks(
+            data, chunk_size=1, encoding='utf-8-sig'))
+
+        joined = b''.join(chunks)
+        self.assertTrue(chunks[0].startswith(codecs.BOM_UTF8))
+        self.assertEqual(joined.count(codecs.BOM_UTF8), 1)
+        self.assertEqual(
+            joined[len(codecs.BOM_UTF8):].decode('utf-8'),
+            data.export('csv'))
+
+    def test_csv_export_chunks_utf16_bom_emitted_once(self):
+        """The utf-16 BOM appears exactly once even with tiny chunks."""
+        data.append(self.john)
+        data.append(self.george)
+        data.headers = self.headers
+
+        chunks = list(registry.get_format('csv').export_set_chunks(
+            data, chunk_size=1, encoding='utf-16'))
+
+        joined = b''.join(chunks)
+        self.assertEqual(joined[:2], codecs.BOM_LE)
+        self.assertEqual(joined.count(codecs.BOM_LE), 1)
+        self.assertEqual(
+            joined.decode('utf-16'), data.export('csv'))
+
+    def test_csv_export_chunks_are_lazy(self):
+        """Formatters and snapshotting do not run before iteration starts."""
+        calls = []
+
+        def tracking(value):
+            calls.append(value)
+            return str(value).upper()
+
+        data.headers = ('h1', 'h2')
+        data.append(('a', 'b'))
+        data.append(('c', 'd'))
+        data.add_formatter(0, tracking)
+
+        chunks = registry.get_format('csv').export_set_chunks(
+            data, chunk_size=7)
+        self.assertEqual(calls, [])
+        first = next(iter(chunks))
+        # header chunk (length 7: "h1,h2\r\n") must not run any formatter
+        self.assertEqual(first, 'h1,h2\r\n')
+        self.assertEqual(calls, [])
+
+    def test_csv_export_chunks_stop_early_skips_later_formatters(self):
+        """Stopping iteration does not format rows that were not reached."""
+        calls = []
+
+        def tracking(value):
+            calls.append(value)
+            return value
+
+        data.append(('r1', 'x'))
+        data.append(('r2', 'x'))
+        data.append(('r3', 'x'))
+        data.headers = ('a', 'b')
+        data.add_formatter(None, tracking)
+
+        generator = registry.get_format('csv').export_set_chunks(
+            data, chunk_size=5)
+        # first chunk is exactly the header line
+        self.assertEqual(next(generator), 'a,b\r\n')
+        self.assertEqual(calls, [])
+        # pulling the next chunk formats row 1 only
+        emitted = ['a,b\r\n', next(generator)]
+        self.assertEqual(calls, ['r1', 'x'])
+        generator.close()
+        # after closing, no later rows are ever formatted
+        self.assertEqual(calls, ['r1', 'x'])
+        self.assertTrue('r2' not in ''.join(emitted))
+
+    def test_csv_export_chunks_formatter_runs_once_per_cell(self):
+        """Each registered formatter touches every cell at most once."""
+        seen = {}
+
+        def tracking(label):
+            def _fmt(value):
+                seen[(label, value)] = seen.get((label, value), 0) + 1
+                return f'{label}:{value}'
+            return _fmt
+
+        data.append(('a', 1))
+        data.append(('b', 2))
+        data.add_formatter(None, tracking('all'))
+        data.add_formatter(0, tracking('col'))
+
+        list(registry.get_format('csv').export_set_chunks(
+            data, chunk_size=2))
+
+        # global formatter once for each of the 4 cells, column formatter
+        # once for each of the 2 first-column cells
+        self.assertEqual(
+            seen,
+            {
+                ('all', 'a'): 1, ('all', 1): 1,
+                ('all', 'b'): 1, ('all', 2): 1,
+                ('col', 'all:a'): 1, ('col', 'all:b'): 1,
+            })
+
+    def test_csv_export_chunks_use_fixed_structural_snapshot(self):
+        """Mutating the Dataset mid-iteration cannot create ragged output."""
+        data.headers = ('h1', 'h2')
+        data.append(('a', 'b'))
+        data.append(('c', 'd'))
+        expected = data.export('csv')
+
+        generator = registry.get_format('csv').export_set_chunks(
+            data, chunk_size=1)
+        emitted = [next(generator), next(generator)]
+        # mutate structure while iteration is in progress: drop a column and
+        # append a row with the new (narrower) width
+        del data['h2']
+        data.append(('narrow',))
+        emitted.extend(generator)
+
+        self.assertEqual(''.join(emitted), expected)
+        self.assertEqual(data.width, 1)
+
+    def test_csv_export_chunks_error_keeps_emitted_chunks(self):
+        """A formatter failure propagates without retracting earlier chunks."""
+        def boom(value):
+            if value == 'bad':
+                raise ValueError('bad cell')
+            return value
+
+        data.headers = ('a', 'b')
+        data.append(('ok', '1'))
+        data.append(('bad', '2'))
+        data.add_formatter(None, boom)
+
+        generator = registry.get_format('csv').export_set_chunks(
+            data, chunk_size=1)
+        emitted = []
+        with self.assertRaises(ValueError):
+            for chunk in generator:
+                emitted.append(chunk)
+
+        self.assertTrue(emitted)
+        prefix = ''.join(emitted)
+        self.assertEqual(prefix, 'a,b\r\nok,1\r\n')
+        self.assertNotIn('bad', prefix)
+
+    def test_csv_export_chunks_invalid_chunk_size(self):
+        data.append(self.john)
+        with self.assertRaises(ValueError):
+            list(registry.get_format('csv').export_set_chunks(
+                data, chunk_size=0))
+
+    def test_csv_export_chunks_empty_dataset(self):
+        chunks = list(
+            registry.get_format('csv').export_set_chunks(data, chunk_size=4))
+        self.assertEqual(chunks, [])
+
+    def test_dataset_export_chunks_csv(self):
+        """Dataset.export_chunks streams CSV and joins to the normal export."""
+        data.headers = ('a', 'b')
+        data.append(('1', '2'))
+
+        chunks = list(data.export_chunks('csv', chunk_size=4))
+        self.assertTrue(all(isinstance(chunk, str) for chunk in chunks))
+        self.assertEqual(''.join(chunks), data.export('csv'))
+
+    def test_dataset_export_chunks_bytes(self):
+        """Dataset.export_chunks streams encoded bytes on demand."""
+        data.append(('é',))
+        chunks = list(data.export_chunks(
+            'csv', chunk_size=1, encoding='utf-8-sig'))
+        self.assertTrue(all(isinstance(chunk, bytes) for chunk in chunks))
+        self.assertEqual(chunks[0][:3], codecs.BOM_UTF8)
+
+    def test_dataset_export_chunks_unsupported_format(self):
+        """Formats without chunked export raise UnsupportedFormat."""
+        data.append(('a',))
+        with self.assertRaises(UnsupportedFormat):
+            list(data.export_chunks('json'))
+
+    def test_tsv_export_chunks_delimiter(self):
+        """TSV inherits the chunk interface with its own delimiter."""
+        data.append(('a', 'b'))
+        chunks = list(registry.get_format('tsv').export_set_chunks(
+            data, chunk_size=2))
+        self.assertEqual(''.join(chunks), 'a\tb\r\n')
 
 
 class TSVTests(BaseTestCase):

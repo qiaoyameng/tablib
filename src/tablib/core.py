@@ -441,6 +441,26 @@ class Dataset:
 
         return fmt.export_set(self, **kwargs)
 
+    def export_chunks(self, format, **kwargs):
+        """
+        Lazily export :class:`Dataset` object to `format` as an iterator of
+        chunks. Useful for streaming a response without materializing the whole
+        export in memory.
+
+        Rows are formatted on demand, so stopping iteration also stops
+        formatting. A fixed structural snapshot of the dataset is taken when
+        iteration starts; see the format implementation for the chunk type
+        (text or bytes) and its parameters.
+
+        :param \\*\\*kwargs: (optional) custom configuration to the format
+            ``export_set_chunks``.
+        """
+        fmt = registry.get_format(format)
+        if not hasattr(fmt, 'export_set_chunks'):
+            raise UnsupportedFormat(f'Format {format} cannot be exported.')
+
+        return fmt.export_set_chunks(self, **kwargs)
+
     # ----
     # Rows
     # ----

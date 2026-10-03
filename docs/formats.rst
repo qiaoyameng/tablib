@@ -71,6 +71,32 @@ functions. For example::
      If you do not do this, and you export the file on Windows, your
      CSV file will open in Excel with a blank line between each row.
 
+Streaming export
+----------------
+
+For large datasets, the CSV and TSV formats can be exported lazily as an
+iterator of chunks with :py:meth:`~tablib.core.Dataset.export_chunks`. Rows
+are formatted on demand, so a web backend can write each chunk to its
+response as it is produced instead of building the whole export in memory::
+
+    for chunk in dataset.export_chunks('csv', chunk_size=8192):
+        response.write(chunk)
+
+Pass ``encoding`` to receive encoded ``bytes`` chunks instead of text. The
+encoding is applied with an incremental encoder, so codecs that emit a byte
+order mark (such as ``utf-8-sig`` or ``utf-16``) write that signature
+exactly once, in the first chunk::
+
+    for chunk in dataset.export_chunks('csv', encoding='utf-8-sig'):
+        response.write_bytes(chunk)
+
+A fixed structural snapshot of the dataset is taken when iteration starts.
+Modifying the dataset while iteration is in progress therefore cannot
+produce rows of mismatched width, and such changes do not affect the export
+that is already running. Stopping iteration early cancels formatting of the
+rows that were never reached; chunks already produced before an error are
+not retracted.
+
 dbf
 ===
 

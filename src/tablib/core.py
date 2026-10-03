@@ -766,6 +766,45 @@ class Dataset:
 
         return _dset
 
+    def plan_merge(self, other, how='union', mappings=None, coercions=None,
+                   fill=None):
+        """Create a reviewable column-identity merge plan for this dataset
+        and ``other``.
+
+        Unlike :meth:`stack`, columns are aligned by header identity rather
+        than by position, so differing column orders and extra columns are
+        handled explicitly. See :func:`tablib.merging.plan_merge` for the
+        full argument reference; call ``.apply()`` on the returned plan to
+        build the merged dataset.
+        """
+
+        from .merging import plan_merge
+        return plan_merge(
+            (self, other),
+            how=how,
+            mappings=mappings,
+            coercions=coercions,
+            fill=fill,
+        )
+
+    def merge(self, other, how='union', mappings=None, coercions=None,
+              fill=None):
+        """Merge this dataset with ``other`` by column identity.
+
+        Equivalent to ``self.plan_merge(other, ...).apply()``; use
+        :meth:`plan_merge` to inspect the coordination plan (result column
+        order, conversions, rejection reasons) first.
+        """
+
+        plan = self.plan_merge(
+            other,
+            how=how,
+            mappings=mappings,
+            coercions=coercions,
+            fill=fill,
+        )
+        return plan.apply((self, other))
+
     def stack_cols(self, other):
         """Stack two :class:`Dataset` instances together by
         joining at the column level, and return a new

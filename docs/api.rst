@@ -39,6 +39,16 @@ Functions
 
 .. autofunction:: import_set
 
+.. autofunction:: plan_merge
+
+.. autofunction:: merge
+
+.. autoclass:: MergePlan
+   :members:
+
+.. autoclass:: ColumnPlan
+   :members:
+
 
 ----------
 Exceptions

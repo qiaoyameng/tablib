@@ -20,3 +20,14 @@ from .core import (  # noqa: F401
     import_book,
     import_set,
 )
+from .merging import (  # noqa: F401
+    INTERSECTION,
+    MISSING,
+    UNION,
+    ColumnPlan,
+    MergePlan,
+    MergePlanError,
+    MergePlanStale,
+    merge,
+    plan_merge,
+)

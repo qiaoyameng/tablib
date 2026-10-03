@@ -414,6 +414,63 @@ The resulting **tests.xls** will have the following layout:
 
 
 
+.. _merging:
+
+--------------------------------
+Merging Datasets by Column Name
+--------------------------------
+
+:meth:`Dataset.stack` joins datasets by position: both inputs must have the
+same width and columns are paired in order. When several departments send
+the same data with reordered, renamed or extra columns, that is not enough.
+:meth:`Dataset.merge` aligns columns by header identity instead.
+
+A merge is planned before it is applied. The plan is reviewable: it lists
+the resulting column order, the value conversions and the rejection
+reasons::
+
+    from tablib import plan_merge
+
+    sales = tablib.Dataset(headers=('name', 'amount'))
+    sales.append(('John', Decimal('12.50')))
+
+    finance = tablib.Dataset(headers=('amount', 'name'))
+    finance.append((Decimal('7.25'), 'Mary'))
+
+    plan = plan_merge([sales, finance])
+    plan.ok               # True
+    plan.result_headers   # ['name', 'amount']
+    merged = plan.apply()
+
+Pass ``how='intersection'`` to keep only the columns every input provides;
+the default ``how='union'`` keeps all columns. Columns missing from a source
+dataset are filled with the value given by ``fill`` (a fixed value, a
+``{header: value}`` mapping, or a callable receiving the column plan).
+A missing column is distinct from a cell that already contains ``None``.
+
+Type reconciliation covers ``bool``/``int``/``float``/``Decimal``,
+``date``/``time``/``datetime`` and text. Only lossless promotions are
+applied automatically; a lossy combination is reported as a rejection and
+must be resolved by the caller::
+
+    plan = plan_merge(
+        [decimal_side, float_side],
+        coercions={('decimal', 'float'): 'decimal'},
+    )
+
+``apply()`` fingerprints the input headers, width and height and raises
+``MergePlanStale`` if a source dataset changed after the plan was created.
+Row tags are carried over, and neither the source datasets nor their row
+objects are mutated.
+
+Headers that occur more than once in a dataset cannot be matched by name,
+so those positions must be mapped explicitly::
+
+    plan = plan_merge(
+        [left, right],
+        mappings={0: {'name': 0, 'nickname': 1}},
+    )
+
 .. admonition:: Format Support
 
     At this time, only :class:`Excel <Dataset.xls>` output supports separators.

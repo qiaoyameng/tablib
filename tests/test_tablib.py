@@ -871,6 +871,179 @@ class HTMLTests(BaseTestCase):
         self.assertEqual('No <table> found with id="notfound" in input HTML', str(exc.exception))
 
 
+class HTMLStructuredHeadersTests(BaseTestCase):
+    structured_html = """
+        <html><body>
+        <table id="report">
+          <thead>
+            <tr><th id="n1" rowspan="2">Name</th><th id="n2" rowspan="2">Name</th><th id="sc" colspan="2">Scores</th></tr>
+            <tr><th id="m" headers="sc">Math</th><th id="en" headers="sc">English</th></tr>
+          </thead>
+          <tbody>
+            <tr><th id="r1" scope="row">Alice</th><td headers="n2 r1">A1</td><td>90</td><td>80</td></tr>
+            <tr><th id="r2" scope="row">Bob</th><td><table><tr><td>inner</td></tr></table>B1</td><td>70</td><td>60</td></tr>
+          </tbody>
+        </table>
+        </body></html>
+    """
+
+    def test_structured_grid_headers_and_width(self):
+        dataset = tablib.import_set(
+            self.structured_html, format="html",
+            table_id="report", structured_headers=True,
+        )
+        self.assertEqual(
+            ['Name', 'Name', 'Scores / Math', 'Scores / English'],
+            dataset.headers,
+        )
+        self.assertEqual([
+            ('Alice', 'A1', '90', '80'),
+            ('Bob', 'B1', '70', '60'),
+        ], dataset[:])
+        # The nested table must not leak into the outer grid.
+        self.assertEqual(4, dataset.width)
+        self.assertEqual(2, dataset.height)
+
+    def test_structured_associations_manifest(self):
+        from tablib.formats._html import HTMLFormat
+
+        dataset = tablib.import_set(
+            self.structured_html, format="html", structured_headers=True,
+        )
+        manifest = json.loads(HTMLFormat.export_associations(dataset))
+        self.assertIsInstance(manifest, list)
+        self.assertEqual(8, len(manifest))
+
+        by_text = {entry['text']: entry for entry in manifest}
+        # Explicit headers= references win for the cell that carries them.
+        self.assertEqual(
+            [('n2', 'explicit'), ('r1', 'explicit')],
+            [(h['id'], h['via']) for h in by_text['A1']['headers']],
+        )
+        # Positional inference for the other cells: column headers above,
+        # row header to the left.
+        self.assertEqual(
+            ['sc', 'm', 'r1'],
+            [h['id'] for h in by_text['90']['headers']],
+        )
+        self.assertEqual(['Scores', 'Math'], by_text['90']['path'])
+        # The nested table text never became a cell of the outer table.
+        self.assertNotIn('inner', by_text)
+
+        # Two same-named headers stay distinct sources: the manifest is a
+        # list of records keyed by id/position, not a dict keyed by text.
+        name_sources = {
+            (h['id'], h['row'], h['col'])
+            for entry in manifest for h in entry['headers']
+            if h['text'] == 'Name'
+        }
+        self.assertEqual({('n1', 0, 0), ('n2', 0, 1)}, name_sources)
+
+    def test_structured_export_associations_without_import(self):
+        from tablib.formats._html import HTMLFormat
+
+        dataset = tablib.Dataset()
+        with self.assertRaises(ValueError):
+            HTMLFormat.export_associations(dataset)
+
+    def test_structured_missing_reference_reports_position(self):
+        from tablib.formats._html import StructuredHeaderError
+
+        html = """
+            <table>
+            <thead><tr><th id="a">A</th></tr></thead>
+            <tbody><tr><td headers="nope">1</td></tr></tbody>
+            </table>
+        """
+        with self.assertRaises(StructuredHeaderError) as exc:
+            tablib.import_set(html, format="html", structured_headers=True)
+        message = str(exc.exception)
+        self.assertIn('"nope"', message)
+        self.assertIn('line 4', message)
+
+    def test_structured_cyclic_reference_reports_positions(self):
+        from tablib.formats._html import StructuredHeaderError
+
+        html = """
+            <table>
+            <thead><tr><th id="a" headers="b">A</th><th id="b" headers="a">B</th></tr></thead>
+            <tbody><tr><td headers="a">1</td><td>2</td></tr></tbody>
+            </table>
+        """
+        with self.assertRaises(StructuredHeaderError) as exc:
+            tablib.import_set(html, format="html", structured_headers=True)
+        message = str(exc.exception)
+        self.assertIn('Cyclic', message)
+        self.assertIn('"a"', message)
+        self.assertIn('"b"', message)
+
+    def test_structured_conflicting_spans_report_positions(self):
+        from tablib.formats._html import StructuredHeaderError
+
+        html = """
+            <table>
+            <tr><td>a</td><td rowspan="2">b</td></tr>
+            <tr><td colspan="2">c</td></tr>
+            </table>
+        """
+        with self.assertRaises(StructuredHeaderError) as exc:
+            tablib.import_set(html, format="html", structured_headers=True)
+        message = str(exc.exception)
+        self.assertIn('Conflicting cell spans', message)
+        self.assertIn('line 4', message)
+        self.assertIn('line 3', message)
+
+    def test_structured_rowspan_zero_stops_at_row_group_boundary(self):
+        html = """
+            <table>
+            <tbody>
+              <tr><td rowspan="0">x</td><td>1</td></tr>
+              <tr><td>2</td></tr>
+            </tbody>
+            <tfoot><tr><td>f1</td><td>f2</td></tr></tfoot>
+            </table>
+        """
+        dataset = tablib.import_set(
+            html, format="html", structured_headers=True, flatten='join',
+        )
+        # rowspan="0" covers both tbody rows but not the tfoot row.
+        self.assertEqual([
+            ('x', '1'),
+            ('', '2'),
+            ('f1', 'f2'),
+        ], dataset[:])
+        self.assertEqual(2, dataset.width)
+
+    def test_structured_non_uniform_paths_require_explicit_flatten(self):
+        from tablib.formats._html import StructuredHeaderError
+
+        html = """
+            <table>
+            <thead><tr><th id="a">A</th></tr></thead>
+            <tbody><tr><td>1</td><td>2</td></tr></tbody>
+            </table>
+        """
+        with self.assertRaises(StructuredHeaderError) as exc:
+            tablib.import_set(html, format="html", structured_headers=True)
+        self.assertIn('flatten', str(exc.exception))
+        # Per-cell associations are preserved on the error.
+        self.assertEqual(2, len(exc.exception.associations))
+        self.assertEqual([['A'], []], [a['path'] for a in exc.exception.associations])
+
+        dataset = tablib.import_set(
+            html, format="html", structured_headers=True, flatten='first',
+        )
+        self.assertEqual(['A', ''], dataset.headers)
+        self.assertEqual([('1', '2')], dataset[:])
+
+    def test_structured_invalid_flatten_value(self):
+        with self.assertRaises(ValueError):
+            tablib.import_set(
+                '<table><tr><td>1</td></tr></table>',
+                format="html", structured_headers=True, flatten='bogus',
+            )
+
+
 class RSTTests(BaseTestCase):
     def test_rst_force_grid(self):
         data = tablib.Dataset()

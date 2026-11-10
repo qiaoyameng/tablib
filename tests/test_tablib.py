@@ -14,7 +14,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import xlrd
-from odf import opendocument, table
+from odf import opendocument, table, text
 from openpyxl.reader.excel import load_workbook
 
 import tablib
@@ -1367,6 +1367,196 @@ class ODSTests(BaseTestCase):
         self.assertListEqual([0, 0, 0, 14, 30, 0], [int(v or 0) for v in duration])
         # datetime value
         self.assertEqual(cells[2].getAttribute('datevalue'), '2019-10-04T12:30:08')
+
+    @staticmethod
+    def _ods_string_cell(value):
+        cell = table.TableCell(valuetype="string")
+        cell.addElement(text.P(text=value))
+        return cell
+
+    def _build_repeated_ods(self, repeat=1_000_000):
+        """Build an ODS whose blank regions use huge repetition markers."""
+        doc = opendocument.OpenDocumentSpreadsheet()
+        sheet = table.Table(name="huge")
+
+        header_row = table.TableRow()
+        header_row.addElement(self._ods_string_cell("h0"))
+        gap_cell = table.TableCell()
+        gap_cell.setAttribute("numbercolumnsrepeated", repeat)
+        header_row.addElement(gap_cell)
+        header_row.addElement(table.TableCell(valuetype="float", value=7))
+        sheet.addElement(header_row)
+
+        blank_row = table.TableRow()
+        blank_row.setAttribute("numberrowsrepeated", repeat)
+        blank_row.addElement(table.TableCell())
+        sheet.addElement(blank_row)
+
+        last_row = table.TableRow()
+        last_row.addElement(table.TableCell(valuetype="float", value=3.5))
+        last_row.addElement(table.TableCell(
+            valuetype="boolean", booleanvalue="true"))
+        date_cell = table.TableCell(
+            valuetype="date", datevalue="2020-01-02")
+        date_cell.addElement(text.P(text="2020-01-02"))
+        last_row.addElement(date_cell)
+        last_row.addElement(self._ods_string_cell("tail"))
+        covered = table.CoveredTableCell()
+        covered.setAttribute("numbercolumnsrepeated", 2)
+        last_row.addElement(covered)
+        last_row.addElement(table.TableCell(valuetype="float", value=99))
+        sheet.addElement(last_row)
+
+        doc.spreadsheet.addElement(sheet)
+        stream = BytesIO()
+        doc.save(stream)
+        return stream.getvalue()
+
+    def test_ods_window_repeated_rows_and_cells(self):
+        repeat = 1_000_000
+        ods_bytes = self._build_repeated_ods(repeat)
+        last_row = repeat + 1
+
+        header = tablib.Dataset().load(
+            ods_bytes, 'ods', window=((0, 1), (0, 4)))
+        self.assertEqual(header.headers, ['h0', '', '', ''])
+
+        tail = tablib.Dataset().load(
+            ods_bytes, 'ods', headers=False,
+            window=((last_row, last_row + 1), (0, 4)))
+        self.assertEqual(tail[0], (3.5, True, dt.date(2020, 1, 2), 'tail'))
+
+        across_gap = tablib.Dataset().load(
+            ods_bytes, 'ods', headers=False,
+            window=((0, 1), (repeat - 1, repeat + 2)))
+        self.assertEqual(across_gap[0], ('', '', 7.0))
+
+    def test_ods_window_covered_table_cells(self):
+        repeat = 1_000_000
+        ods_bytes = self._build_repeated_ods(repeat)
+        last_row = repeat + 1
+
+        covered_window = tablib.Dataset().load(
+            ods_bytes, 'ods', headers=False,
+            window=((last_row, last_row + 1), (4, 7)))
+        self.assertEqual(covered_window[0], ('', '', 99.0))
+
+    def test_ods_window_out_of_bounds(self):
+        repeat = 1_000_000
+        ods_bytes = self._build_repeated_ods(repeat)
+
+        out_of_bounds = tablib.Dataset().load(
+            ods_bytes, 'ods', headers=False,
+            window=((repeat + 50, repeat + 53), (10, 12)))
+        self.assertEqual(out_of_bounds.height, 3)
+        self.assertEqual(out_of_bounds.width, 2)
+        self.assertTrue(all(row == ('', '') for row in out_of_bounds))
+
+    def test_ods_window_matches_equivalent_small_table(self):
+        repeat = 1_000_000
+        huge = self._build_repeated_ods(repeat)
+
+        doc = opendocument.OpenDocumentSpreadsheet()
+        small_sheet = table.Table(name="huge")
+        small_header = table.TableRow()
+        small_header.addElement(self._ods_string_cell("h0"))
+        for _ in range(3):
+            small_header.addElement(table.TableCell())
+        small_sheet.addElement(small_header)
+        small_row = table.TableRow()
+        small_row.addElement(table.TableCell(valuetype="float", value=3.5))
+        small_row.addElement(table.TableCell(
+            valuetype="boolean", booleanvalue="true"))
+        small_date = table.TableCell(
+            valuetype="date", datevalue="2020-01-02")
+        small_date.addElement(text.P(text="2020-01-02"))
+        small_row.addElement(small_date)
+        small_row.addElement(self._ods_string_cell("tail"))
+        small_sheet.addElement(small_row)
+        doc.spreadsheet.addElement(small_sheet)
+        stream = BytesIO()
+        doc.save(stream)
+
+        huge_view = tablib.Dataset().load(
+            huge, 'ods', headers=False,
+            window=((repeat + 1, repeat + 2), (0, 4)))
+        small_view = tablib.Dataset().load(
+            stream.getvalue(), 'ods', headers=False,
+            window=((1, 2), (0, 4)))
+        self.assertEqual(huge_view[:], small_view[:])
+
+    def test_ods_window_does_not_expand_repeated_nodes(self):
+        repeat = 1_000_000
+        ods_bytes = self._build_repeated_ods(repeat)
+        created = {"row": 0, "cell": 0}
+        original_row_init = table.TableRow.__init__
+        original_cell_init = table.TableCell.__init__
+
+        def counting_row(self, *args, **kwargs):
+            created["row"] += 1
+            return original_row_init(self, *args, **kwargs)
+
+        def counting_cell(self, *args, **kwargs):
+            created["cell"] += 1
+            return original_cell_init(self, *args, **kwargs)
+
+        table.TableRow.__init__ = counting_row
+        table.TableCell.__init__ = counting_cell
+        try:
+            tablib.Dataset().load(
+                ods_bytes, 'ods', window=((0, 1), (0, 4)))
+        finally:
+            table.TableRow.__init__ = original_row_init
+            table.TableCell.__init__ = original_cell_init
+
+        self.assertLess(created["row"], 50)
+        self.assertLess(created["cell"], 200)
+
+    def test_ods_window_per_sheet(self):
+        doc = opendocument.OpenDocumentSpreadsheet()
+        for name, values in (
+            ("alpha", (("a0", "a1", "a2"), ("a3", "a4", "a5"))),
+            ("beta", (("b0", "b1"), ("b2", "b3"))),
+        ):
+            sheet = table.Table(name=name)
+            for row_values in values:
+                row = table.TableRow()
+                for value in row_values:
+                    row.addElement(self._ods_string_cell(value))
+                sheet.addElement(row)
+            doc.spreadsheet.addElement(sheet)
+        stream = BytesIO()
+        doc.save(stream)
+
+        by_name = tablib.Databook().load(
+            stream.getvalue(), 'ods',
+            window={
+                "alpha": ((0, 2), (0, 2)),
+                "beta": ((1, 2), (1, 2)),
+            })
+        alpha, beta = by_name.sheets()
+        self.assertEqual(alpha.headers, ["a0", "a1"])
+        self.assertEqual(alpha[0], ("a3", "a4"))
+        self.assertEqual(beta.headers, ["b3"])
+
+        by_index = tablib.Databook().load(
+            stream.getvalue(), 'ods', headers=False,
+            window={0: ((1, 2), (1, 3))})
+        sheets = by_index.sheets()
+        self.assertEqual(sheets[0][0], ("a4", "a5"))
+        self.assertEqual(sheets[1].height, 2)
+
+    def test_ods_window_validation(self):
+        ods_bytes = self._build_repeated_ods(10)
+        with self.assertRaises(ValueError):
+            tablib.Dataset().load(ods_bytes, 'ods', window=((0, 1),))
+        with self.assertRaises(ValueError):
+            tablib.Dataset().load(
+                ods_bytes, 'ods', window=((0, 1, 2), (0, 1)))
+        with self.assertRaises(ValueError):
+            tablib.Dataset().load(
+                ods_bytes, 'ods', skip_lines=1,
+                window=((0, 1), (0, 1)))
 
 
 class XLSTests(BaseTestCase):

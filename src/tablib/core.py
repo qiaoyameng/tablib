@@ -858,6 +858,25 @@ class Dataset:
 
         return _dset
 
+    def snapshot(self, on_mutable='reject', block_size=None):
+        """Return an immutable, read-only :class:`~tablib.snapshot.Snapshot`.
+
+        The snapshot captures the current structure (headers, title,
+        formatter bindings, separators, row tags) and cell values, sharing
+        immutable scalar storage.  Later changes to this dataset never affect
+        the snapshot.
+
+        :param on_mutable: ``'reject'`` (default) raises on mutable cells,
+            ``'copy'`` deep-copies them instead.
+        :param block_size: optional override for storage block row capacity.
+        """
+        from .snapshot import DEFAULT_BLOCK_SIZE, Snapshot
+
+        kwargs = {'on_mutable': on_mutable}
+        if block_size is not None:
+            kwargs['block_size'] = block_size
+        return Snapshot.from_dataset(self, **kwargs)
+
 
 class Databook:
     """A book of :class:`Dataset` objects.

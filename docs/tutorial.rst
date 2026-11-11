@@ -420,4 +420,48 @@ The resulting **tests.xls** will have the following layout:
 
 ----
 
+.. _snapshots:
+
+-----------------------------
+Snapshots, Views and Branches
+-----------------------------
+
+When many export tasks need different subsets of the same table, copying the
+whole :class:`Dataset` for each task is wasteful.  A read-only
+:class:`~tablib.Snapshot` captures the current structure (headers, title,
+formatter bindings, separators and row tags) and shares immutable scalar cells
+through storage blocks::
+
+    snapshot = data.snapshot()
+
+Later changes to ``data`` (appends, deletes, column edits, sorting or tag
+changes) never affect the snapshot.
+
+A :class:`~tablib.DatasetView` is a row/column projection that reads through to
+the snapshot's blocks, so overlapping views share storage instead of copying
+cells::
+
+    eastern = snapshot.view(rows=[0, 2], cols=['first_name', 'gpa'])
+    admins = snapshot.view(tags='admin')
+
+CSV and JSON exports follow the snapshot's captured structure::
+
+    eastern.export('csv')
+    admins.json
+
+To edit a subset, materialize a copy-on-write branch with
+:meth:`~tablib.DatasetView.to_branch`.  The result is a normal
+:class:`Dataset`; only the storage blocks touched by a mutation are copied,
+and the source snapshot stays untouched::
+
+    branch = eastern.to_branch()
+    branch[(0, 1)] = 99
+
+Only immutable scalar cells are shared.  Mutable cells are rejected by
+default; pass ``on_mutable='copy'`` to deep-copy them instead::
+
+    safe_snapshot = data.snapshot(on_mutable='copy')
+
+----
+
 Now, go check out the :ref:`API Documentation <api>` or begin :ref:`Tablib Development <development>`.

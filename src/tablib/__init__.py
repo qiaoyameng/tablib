@@ -20,3 +20,11 @@ from .core import (  # noqa: F401
     import_book,
     import_set,
 )
+from .snapshot import (  # noqa: F401
+    DatasetView,
+    Snapshot,
+    SnapshotDataset,
+    StorageBlock,
+    StorageStats,
+    is_immutable_scalar,
+)

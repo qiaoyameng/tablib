@@ -30,6 +30,35 @@ Databook Object
    :inherited-members:
 
 
+------------------
+Snapshots & Views
+------------------
+
+A :class:`~tablib.Snapshot` is an immutable capture of a :class:`Dataset`
+that shares immutable scalar storage through storage blocks. Overlapping
+:class:`~tablib.DatasetView` objects read through to the same blocks, while
+:meth:`DatasetView.to_branch` materializes an editable
+:class:`~tablib.SnapshotDataset` using copy-on-write.
+
+
+.. autoclass:: Snapshot
+   :members:
+
+.. autoclass:: DatasetView
+   :members:
+
+.. autoclass:: SnapshotDataset
+   :members:
+
+.. autoclass:: StorageBlock
+   :members:
+
+.. autoclass:: StorageStats
+   :members:
+
+.. autofunction:: is_immutable_scalar
+
+
 ---------
 Functions
 ---------
